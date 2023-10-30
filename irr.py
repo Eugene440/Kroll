@@ -13,9 +13,7 @@
 
 import math
 import pandas as pd
-import numpy_financial as npf
 from datetime import datetime
-import numpy as np
 
 #------------------------------------------------------------------------------
 #                     ----    Define variables ----
@@ -41,7 +39,7 @@ data = {
     'Default_Multiplier': 1.000,
     'Prepay_Multiplier': 1.000,
     'Product_Pos': 66,
-    'Default_Rate': 0.03,  # Add the Default_Rate value here
+    'Default_Rate': 0.03,
 }
 
 
@@ -155,6 +153,89 @@ def bankers_round(n, decimals=0):
 
 
 #------------------------------------------------------------------------------
+#                     ---- PMT   ----
+#------------------------------------------------------------------------------
+
+def pmt_local_implementation(rate, np, pv):
+    """
+    Calculate the payment against loan principal plus interest.
+
+    Parameters:
+    rate : float - The interest rate divided by the number of periods.
+    np : int - The number of periods.
+    pv : float - The present value.
+    """
+    #print(f" {pv} * {rate} / (1 -(1 + {rate})** -{np})")
+    return pv * rate / (1 - (1 + rate)**-np)
+
+#------------------------------------------------------------------------------
+#                     ---- PPMT   ----
+#------------------------------------------------------------------------------
+
+def ppmt_local_implementation(rate, per, np, pv):
+    """
+    Parameters:
+    rate : float - The interest rate
+    per : int -  The period for which the principal payment needs to be calculated.
+    np : int - The number of periods
+    pv : float - The present value
+    """
+
+    total_pmt = pmt_local_implementation(rate, np, pv)
+    ipmt = pv * rate
+    principal_payment = total_pmt - ipmt
+    for i in range(1, per):
+        pv -= principal_payment
+        ipmt = pv * rate
+        principal_payment = total_pmt - ipmt
+    return -principal_payment
+
+#------------------------------------------------------------------------------
+#                     ---- IIR   ----
+#------------------------------------------------------------------------------
+
+def irr_local_implementation(cashflows, max_iteration=100, tol=1e-6):
+    """
+    Calculate the Internal Rate of Return (IRR).
+
+    Parameters:
+    cashflows : list of float - A list of cash flows where the first value is the initial investment.
+    max_iteration : int, optional - Maximum number of iterations
+    tol : float, optional - Tolerance level.
+
+    Returns : rate (float) Approximated IRR.
+    """
+    rate = 0.1  # Initial guess for the rate
+
+    for i in range(max_iteration):
+        # Calculate the value of the function at the current rate
+        f_value = sum([cf / (1 + rate)**t for t, cf in enumerate(cashflows)])
+
+        #print("cashflows:", cashflows)
+        #print("Intermediate results:", [cf / (1 + rate)**t for t, cf in enumerate(cashflows)])
+        #print("Final result (f_value):", f_value)
+
+        # Calculate the derivative of the function at the current rate
+        f_prime_value = sum([-t * cf / (1 + rate)**(t+1) for t, cf in enumerate(cashflows)])
+
+        #print("cashflows:", cashflows)
+        #print("Intermediate results:", [-t * cf / (1 + rate)**(t+1) for t, cf in enumerate(cashflows)])
+        #print("Final result (f_prime_value):", f_prime_value)
+
+        # Update the rate using the Newton-Raphson formula
+        rate -= f_value / f_prime_value
+        #print(f"Iteration {i}: Rate updated to {rate}")
+
+        # Check for convergence
+        if abs(f_value) < tol:
+            print(f"Converged after {i} iterations")
+            break
+        elif i == max_iteration - 1:
+            print("Max iterations reached without convergence!")
+
+    return rate
+
+#------------------------------------------------------------------------------
 #                     ----    Calculate Default_Rate  ----
 #------------------------------------------------------------------------------
 
@@ -182,7 +263,7 @@ recovery_rate = df['Recovery_Rate'].values[0]
 payment_df['Default_Rate'] = payment_df['Default_Rate'].astype(float)
 
 # Before entering the loop, calculate the monthly payment
-monthly_payment = npf.pmt(monthly_interest_rate, num_periods, -initial_investment)
+monthly_payment = abs(pmt_local_implementation(monthly_interest_rate, num_periods, -initial_investment))
 
 zero_columns = [
     'Scheduled_Principal', 'Scheduled_Interest', 'Prepay_Speed', 'Default',
@@ -213,8 +294,7 @@ for index in range(len(payment_df)):
 
 
         # Calculate Scheduled_Principal for the current row
-        #scheduled_principal =  npf.ppmt(monthly_interest_rate, payment_df.at[index, 'Months'] - 1, num_periods, -initial_investment)
-        scheduled_principal =  (npf.ppmt(monthly_coupon_rate , payment_df.at[index, 'Months'] - 1, num_periods, -initial_investment)).round(12)
+        scheduled_principal =  (ppmt_local_implementation(monthly_coupon_rate , payment_df.at[index, 'Months'] - 1, num_periods, -initial_investment)).round(12)
         payment_df.at[index, 'Scheduled_Principal'] = scheduled_principal
 
 
@@ -234,7 +314,7 @@ for index in range(len(payment_df)):
         payment_df.at[index, 'Scheduled_Interest'] = scheduled_interest
 
 
-        # Calculate prepay_speed
+        # Calculate prepayreplacementreplacement_speed
         prepay_speed = prepay_df.iloc[index]['36']
         #prepay_speed = pd.to_numeric(prepay_speed, errors='coerce')
         prepay_speed = float(prepay_speed)
@@ -287,7 +367,7 @@ for index in range(len(payment_df)):
 
 # Calculate the IRR
 cash_flows = payment_df['Total_CF'].values
-annual_irr = npf.irr(cash_flows) * 12 *100
+annual_irr = irr_local_implementation(cash_flows, 1000 ) * 12 *100
 
 # Find the longest key length for formatting
 max_key_length = max(len(key) for key in data.keys())
